@@ -144,13 +144,10 @@ class TraceViewDialog(QtWidgets.QDialog):
             spinbox_1.setValue(5)
             combobox = QtWidgets.QComboBox()
             combobox.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
-            combobox.setMinimumContentsLength(3)
+            combobox.setMinimumContentsLength(8)
             combobox.setMaxVisibleItems(10)
             for n in range(1, len(channels)+1):
-                combobox.addItem(f'ax{n}')
-            # spinbox_2 = QtWidgets.QSpinBox()
-            # spinbox_2.setRange(0, len(channels))
-            # spinbox_2.setValue(0)
+                combobox.addItem(f'y-axis {n}')
             layout.addWidget(label, row, 0)
             layout.addWidget(checkbox_1, row, 1)
             layout.addWidget(checkbox_2, row, 2)
@@ -158,7 +155,6 @@ class TraceViewDialog(QtWidgets.QDialog):
             layout.addWidget(checkbox_3, row, 4)
             checkbox_3.toggled[bool].connect(spinbox_1.setDisabled)
             layout.addWidget(checkbox_4, row, 5)
-            # layout.addWidget(spinbox_2, row, 6)
             layout.addWidget(combobox, row, 6)
             layout.addWidget(checkbox_5, row, 7)
             checkbox_5.toggled[bool].connect(combobox.setDisabled)
@@ -179,7 +175,7 @@ class TraceViewDialog(QtWidgets.QDialog):
     def get_channel_states(self) -> Dict[str, Tuple[bool, bool, Union[int, None], bool, Union[str, None]]]:
         return {
             ch: (w[0].isChecked(), w[1].isChecked(), None if w[3].isChecked() else w[2].value(), w[4].isChecked(),
-                 None if w[6].isChecked() else w[5].value()) for ch, w in self.channel_widgets.items()
+                 None if w[6].isChecked() else w[5].currentText()) for ch, w in self.channel_widgets.items()
         }
 
     def set_channel_states(self,
@@ -205,4 +201,5 @@ class TraceViewDialog(QtWidgets.QDialog):
                     widgets[6].setChecked(True)
                 else:
                     widgets[6].setChecked(False)
-                    widgets[5].setValue(state[4])
+                    index = widgets[5].findText(state[4])
+                    widgets[5].setCurrentIndex(index)
