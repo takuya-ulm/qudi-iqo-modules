@@ -70,6 +70,8 @@ class TimeSeriesGui(GuiBase):
     _visible_traces = StatusVar(name='visible_traces', default=dict())
     _current_value_channel_precision = StatusVar(name='current_value_channel_precision',
                                                  default=dict())
+    _show_channel_label = StatusVar(name='show_channel_label', default=dict())
+    _link_to_axis = StatusVar(name='link_to_axis', default=dict())
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -96,6 +98,12 @@ class TimeSeriesGui(GuiBase):
         }
         self._current_value_channel_precision = {
             ch: self._current_value_channel_precision.get(ch, None) for ch in all_channels
+        }
+        self._show_channel_label = {
+            ch: self._show_channel_label.get(ch, True) for ch in all_channels
+        }
+        self._link_to_axis = {
+            ch: self._link_to_axis.get(ch, None) for ch in all_channels
         }
 
         # Configure PlotWidget
@@ -240,8 +248,8 @@ class TimeSeriesGui(GuiBase):
     def trace_view_settings(self) -> Dict[str, Tuple[bool, bool, Union[int, None]]]:
         """ Read-only """
         return {
-            ch: [*flags, self._current_value_channel_precision[ch]] for ch, flags in
-            self._visible_traces.items()
+            ch: [*flags, self._current_value_channel_precision[ch], self._show_channel_label[ch],
+                 self._link_to_axis[ch]] for ch, flags in self._visible_traces.items()
         }
 
     def _exec_trace_view_dialog(self):
@@ -250,6 +258,7 @@ class TimeSeriesGui(GuiBase):
         dialog.set_channel_states(current_settings)
         # Show modal dialog and update logic if necessary
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            print(dialog.get_channel_states())
             self._apply_trace_view_settings(dialog.get_channel_states())
 
     def _exec_channel_settings_dialog(self):
@@ -275,13 +284,15 @@ class TimeSeriesGui(GuiBase):
 
     def _apply_trace_view_settings(self, setting):
         active_channels, averaged_channels = self._time_series_logic_con().channel_settings
-        for chnl, (show_data, show_average, precision) in setting.items():
+        for chnl, (show_data, show_average, precision, label, axis) in setting.items():
             chnl_active = chnl in active_channels
             data_visible = show_data and chnl_active
             average_visible = show_average and chnl_active and (chnl in averaged_channels)
             self._toggle_channel_data_plot(chnl, data_visible, average_visible)
             self._visible_traces[chnl] = (show_data, show_average)
             self._current_value_channel_precision[chnl] = precision
+            self._show_channel_label[chnl] = label
+            self._link_to_axis[chnl] = axis
 
     def _apply_channel_settings(self, setting):
         self.sigChannelSettingsChanged.emit(
