@@ -181,7 +181,7 @@ class TimeSeriesGuiMainWindow(QtWidgets.QMainWindow):
         self.current_value_label = QtWidgets.QLabel('0')
         font = self.current_value_label.font()
         font.setBold(True)
-        font.setPointSize(60)
+        font.setPointSize(20)
         self.current_value_label.setFont(font)
         self.current_value_label.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
         self.current_value_combobox = QtWidgets.QComboBox()

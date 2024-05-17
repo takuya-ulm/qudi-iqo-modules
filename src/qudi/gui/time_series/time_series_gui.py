@@ -27,6 +27,8 @@ import numpy as np
 from PySide2 import QtCore, QtWidgets
 from typing import Union, Dict, Tuple
 
+import traceback
+
 from qudi.core.statusvariable import StatusVar
 from qudi.core.connector import Connector
 from qudi.core.configoption import ConfigOption
@@ -79,10 +81,14 @@ class TimeSeriesGui(GuiBase):
         self._streamer_constraints = None
         self._mw = None
         self._vb = None
+        self._add_vb = []
+        self._add_axes = []
         self.curves = dict()
         self.averaged_curves = dict()
 
         self._channels_per_axis = [set(), set()]
+
+        self._activated_channel_label = list()
 
     def on_activate(self):
         """ Initialisation of the GUI """
@@ -122,9 +128,20 @@ class TimeSeriesGui(GuiBase):
         self._vb.setXLink(self._mw.trace_plot_widget)
         self._vb.setMouseEnabled(x=False, y=False)
         self._vb.setMenuEnabled(False)
+
+        # create additional y-axes to show all plots at the same time
+        for i in range(len(all_channels) - 1):
+            self._add_vb.append(pg.ViewBox())
+            self._add_axes.append(pg.AxisItem('right'))
+            self._mw.trace_plot_widget.getPlotItem().layout.addItem(self._add_axes[-1], 2, i + 3)
+            self._mw.trace_plot_widget.scene().addItem(self._add_vb[-1])
+            self._add_axes[-1].linkToView(self._add_vb[-1])
+            self._add_vb[-1].setXLink(self._mw.trace_plot_widget.getPlotItem())
+            self._add_vb[-1].setMouseEnabled(x=False, y=False)
+            self._add_vb[-1].setMenuEnabled(False)
+
         # Sync resize events
         self._mw.trace_plot_widget.plotItem.vb.sigResized.connect(self.__update_viewbox_sync)
-
         self._mw.trace_plot_widget.disableAutoRange(axis='x')
         # self._mw.trace_plot_widget.setAutoVisible(x=True)
 
@@ -135,15 +152,18 @@ class TimeSeriesGui(GuiBase):
             # FIXME: Choosing a pen width != 1px (not cosmetic) causes massive performance drops
             # For mixed signals each signal type (digital or analog) has the same color
             # If just a single signal type is present, alternate the colors accordingly
-            if i % 3 == 0:
+            if i % 4 == 0:
                 pen1 = pg.mkPen(palette.c2, cosmetic=True)
                 pen2 = pg.mkPen(palette.c1, cosmetic=True)
-            elif i % 3 == 1:
+            elif i % 4 == 1:
                 pen1 = pg.mkPen(palette.c3, cosmetic=True)
                 pen2 = pg.mkPen(palette.c4, cosmetic=True)
-            else:
+            elif i % 4 == 2:
                 pen1 = pg.mkPen(palette.c5, cosmetic=True)
                 pen2 = pg.mkPen(palette.c6, cosmetic=True)
+            else:
+                pen1 = pg.mkPen(palette.c8, cosmetic=True)
+                pen2 = pg.mkPen(palette.c7, cosmetic=True)
             self.averaged_curves[ch] = pg.PlotCurveItem(pen=pen1,
                                                         clipToView=True,
                                                         downsampleMethod='subsample',
@@ -245,11 +265,11 @@ class TimeSeriesGui(GuiBase):
         self._mw.close()
 
     @property
-    def trace_view_settings(self) -> Dict[str, Tuple[bool, bool, Union[int, None]]]:
+    def trace_view_settings(self) -> Dict[str, Tuple[bool, bool, Union[str, None], bool]]:
         """ Read-only """
         return {
-            ch: [*flags, self._current_value_channel_precision[ch], self._show_channel_label[ch],
-                 self._link_to_axis[ch]] for ch, flags in self._visible_traces.items()
+            ch: [*flags, self._current_value_channel_precision[ch], self._show_channel_label[ch]]
+            for ch, flags in self._visible_traces.items()
         }
 
     def _exec_trace_view_dialog(self):
@@ -258,14 +278,14 @@ class TimeSeriesGui(GuiBase):
         dialog.set_channel_states(current_settings)
         # Show modal dialog and update logic if necessary
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            print(dialog.get_channel_states())
             self._apply_trace_view_settings(dialog.get_channel_states())
 
     def _exec_channel_settings_dialog(self):
         logic = self._time_series_logic_con()
         active_channels, averaged_channels = logic.channel_settings
         channels = list(self._streamer_constraints.channel_units)
-        channel_states = {ch: (ch in active_channels, ch in averaged_channels) for ch in channels}
+        channel_states = {ch: (ch in active_channels, ch in averaged_channels, self._link_to_axis[ch])
+                          for ch in channels}
         dialog = ChannelSettingsDialog(channels, parent=self._mw)
         dialog.set_channel_states(channel_states)
         # Show modal dialog and update logic if necessary
@@ -278,13 +298,17 @@ class TimeSeriesGui(GuiBase):
         try:
             self._vb.setGeometry(self._mw.trace_plot_widget.plotItem.vb.sceneBoundingRect())
             self._vb.linkedViewChanged(self._mw.trace_plot_widget.plotItem.vb, self._vb.XAxis)
+            for viewb in self._add_vb:
+                viewb.setGeometry(self._mw.trace_plot_widget.plotItem.vb.sceneBoundingRect())
+                viewb.linkedViewChanged(self._mw.trace_plot_widget.plotItem.vb, viewb.XAxis)
         except:
-            self.log.exception('sdsdasd')
+            self.log.exception('sdsdasd-ok')
             raise
 
     def _apply_trace_view_settings(self, setting):
         active_channels, averaged_channels = self._time_series_logic_con().channel_settings
-        for chnl, (show_data, show_average, precision, label, axis) in setting.items():
+        self._activated_channel_label = list()
+        for chnl, (show_data, show_average, precision, label) in setting.items():
             chnl_active = chnl in active_channels
             data_visible = show_data and chnl_active
             average_visible = show_average and chnl_active and (chnl in averaged_channels)
@@ -292,12 +316,15 @@ class TimeSeriesGui(GuiBase):
             self._visible_traces[chnl] = (show_data, show_average)
             self._current_value_channel_precision[chnl] = precision
             self._show_channel_label[chnl] = label
-            self._link_to_axis[chnl] = axis
+            if label:
+                self._activated_channel_label.append(chnl)
 
     def _apply_channel_settings(self, setting):
+        for chnl, (show_data, show_average, axis) in setting.items():
+            self._link_to_axis[chnl] = axis
         self.sigChannelSettingsChanged.emit(
-            [ch for ch, (enabled, _) in setting.items() if enabled],
-            [ch for ch, (_, averaged) in setting.items() if averaged]
+            [ch for ch, (enabled, _, _) in setting.items() if enabled],
+            [ch for ch, (_, averaged, _) in setting.items() if averaged]
         )
 
     @QtCore.Slot(list, list)
@@ -307,10 +334,8 @@ class TimeSeriesGui(GuiBase):
         try:
             self._mw.current_value_combobox.clear()
             self._mw.current_value_combobox.addItem('None')
-            self._mw.current_value_combobox.addItems(
-                [f'average {ch}' for ch in averaged if ch in enabled]
-            )
-            self._mw.current_value_combobox.addItems(enabled)
+            self._mw.current_value_combobox.addItem('average')
+            self._mw.current_value_combobox.addItem('precise')
             index = self._mw.current_value_combobox.findText(self._current_value_channel)
             if index < 0:
                 self._mw.current_value_combobox.setCurrentIndex(0)
@@ -321,47 +346,92 @@ class TimeSeriesGui(GuiBase):
         self._current_value_channel = self._mw.current_value_combobox.currentText()
 
         # Update plot widget axes
+        # create axis map which contains {axis: [channels], ...}
+        axis_map = dict()
+        for key, value in self._link_to_axis.items():
+            if value not in axis_map:
+                axis_map[value] = [key] if key in enabled else ['']
+            else:
+                axis_map[value].append(key) if key in enabled else ''
+            # sort out not enabled channels
+            axis_map.update({key: [element for element in value if element] for key, value in axis_map.items()})
+        # sort out connected axis although the channel is not enabled
+        axis_map = {k: v for k, v in axis_map.items() if v}
+
         self._streamer_constraints = self._time_series_logic_con().streamer_constraints
         channel_units = self._streamer_constraints.channel_units
         different_units = list({unit for ch, unit in channel_units.items() if ch in enabled})
         self._channels_per_axis = list()
-        if len(different_units) == 2:
-            self._mw.trace_plot_widget.showAxis('right')
-            self._channels_per_axis = [
-                tuple(ch for ch in enabled if channel_units[ch] == different_units[0]),
-                tuple(ch for ch in enabled if channel_units[ch] == different_units[1])
-            ]
-            if len(enabled) == 2:
+
+        # hide all axis and display them if needed later
+        for vb, axis in zip(self._add_vb, self._add_axes):
+            axis.showLabel(show=False)
+            axis.setStyle(showValues=False, tickAlpha=0)
+
+        if None in axis_map:
+            if len(axis_map[None]) >= 2:
+                self._channels_per_axis = [(axis_map[None][0],), (axis_map[None][1],)]
+                color_text_left = self.curves[axis_map[None][0]].opts['pen'].color().name() \
+                    if axis_map[None][0] not in averaged \
+                    else self.averaged_curves[axis_map[None][0]].opts['pen'].color().name()
                 self._mw.trace_plot_widget.setLabel('left',
-                                                    self._channels_per_axis[0][0],
-                                                    units=different_units[0])
+                                                    f'<font color="{color_text_left}">{axis_map[None][0]}</font>',
+                                                    units=channel_units[axis_map[None][0]])
+                color_text_right = self.curves[axis_map[None][1]].opts['pen'].color().name() \
+                    if axis_map[None][1] not in averaged \
+                    else self.averaged_curves[axis_map[None][1]].opts['pen'].color().name()
                 self._mw.trace_plot_widget.setLabel('right',
-                                                    self._channels_per_axis[1][0],
-                                                    units=different_units[1])
+                                                    f'<font color="{color_text_right}">{axis_map[None][1]}</font>',
+                                                    units=channel_units[axis_map[None][1]])
+                if len(axis_map[None]) > 2:
+                    for ch, vb, axis in zip(axis_map[None][2:], self._add_vb, self._add_axes):
+                        self._channels_per_axis.append((ch,))
+                        axis.showLabel(show=True)
+                        axis.setStyle(showValues=True, tickAlpha=255)
+                        label_color = self.curves[ch].opts['pen'].color().name() \
+                            if ch not in averaged else self.averaged_curves[ch].opts['pen'].color().name()
+                        axis.setLabel(text=f'<font color="{label_color}">{ch}</font>',
+                                      units=channel_units[ch])
             else:
-                self._mw.trace_plot_widget.setLabel('left', 'Signal', units=different_units[0])
-                self._mw.trace_plot_widget.setLabel('right', 'Signal', units=different_units[1])
-        elif len(different_units) > 2:
-            self._mw.trace_plot_widget.hideAxis('right')
-            self._channels_per_axis = [tuple(enabled), tuple()]
-            self._mw.trace_plot_widget.setLabel('left', 'Signal', units='')
-        elif len(enabled) == 2:
-            self._mw.trace_plot_widget.hideAxis('right')
-            self._channels_per_axis = [(enabled[0],), (enabled[1],)]
-            self._mw.trace_plot_widget.setLabel('left',
-                                                enabled[0],
-                                                units=channel_units[enabled[0]])
-            self._mw.trace_plot_widget.setLabel('right',
-                                                enabled[1],
-                                                units=channel_units[enabled[1]])
-        elif len(enabled) > 2:
-            self._mw.trace_plot_widget.hideAxis('right')
-            self._channels_per_axis = [tuple(enabled), tuple()]
-            self._mw.trace_plot_widget.setLabel('left', 'Signal', units=different_units[0])
-        else:
-            self._mw.trace_plot_widget.hideAxis('right')
-            self._channels_per_axis = [tuple(enabled), tuple()]
-            self._mw.trace_plot_widget.setLabel('left', enabled[0], units=different_units[0])
+                self._mw.trace_plot_widget.hideAxis('right')
+                self._channels_per_axis = [tuple(axis_map[None]), tuple()]
+                label_color = self.curves[axis_map[None][0]].opts['pen'].color().name() \
+                    if axis_map[None][0] not in averaged \
+                    else self.averaged_curves[axis_map[None][0]].opts['pen'].color().name()
+                self._mw.trace_plot_widget.setLabel('left', f'<font color="{label_color}">{axis_map[None][0]}</font>',
+                                                    units=different_units[0])
+
+        try:
+            axis_index = len(axis_map[None])
+        except KeyError:
+            axis_index = 0
+
+        # only add another axis if there is a channel to be displayed
+        if axis_index < len(channel_units):
+            # ch_list is a list of channels to be displayed onto one axis
+            for ch_list in [values for key, values in axis_map.items() if key is not None]:
+                label_text = ''
+                for ch in ch_list:
+                    ch_color = self.curves[ch].opts['pen'].color().name() \
+                        if ch not in averaged \
+                        else self.averaged_curves[ch].opts['pen'].color().name()
+                    label_text += f' <font color="{ch_color}">{ch}</font>'
+                if axis_index == 0:
+                    self._mw.trace_plot_widget.hideAxis('right')
+                    self._mw.trace_plot_widget.setLabel('left',
+                                                        label_text,
+                                                        units=channel_units[ch_list[0]])
+                elif axis_index == 1:
+                    self._mw.trace_plot_widget.setLabel('right',
+                                                        label_text,
+                                                        units=channel_units[ch_list[0]])
+                else:
+                    self._add_axes[axis_index - 2].showLabel(True)
+                    self._add_axes[axis_index - 2].setStyle(showValues=True, tickAlpha=255)
+                    self._add_axes[axis_index - 2].setLabel(text=label_text,
+                                                            units=channel_units[ch_list[0]])
+                self._channels_per_axis.append(tuple([ch for ch in ch_list]))
+                axis_index += 1
 
         for ch in channel_units:
             show_channel = (ch in enabled) and self._visible_traces[ch][0]
@@ -388,23 +458,33 @@ class TimeSeriesGui(GuiBase):
         channel = self._mw.current_value_combobox.currentText()
         if channel and channel != 'None':
             try:
-                if channel.startswith('average '):
-                    channel = channel.split('average ', 1)[-1]
-                    val = smooth_data[channel][-1]
+                enabled = self._time_series_logic_con().active_channel_names
+                averaged = self._time_series_logic_con().averaged_channel_names
+                disp_chls = [ch for ch, value in self._show_channel_label.items()
+                             if (value and ch in enabled)]
+                if channel.startswith('average'):
+                    try:
+                        vals = [smooth_data[ch][-1] if ch in smooth_data else data[ch][-1] for ch in disp_chls]
+                    except TypeError:
+                        vals = [data[ch][-1] for ch in disp_chls]
                 else:
-                    val = data[channel][-1]
+                    vals = [data[ch][-1] for ch in disp_chls]
                 constraints = self._time_series_logic_con().streamer_constraints
-                ch_unit = constraints.channel_units[channel]
-                precision = self._current_value_channel_precision[channel]
-                if np.isnan(val):
-                    self._mw.current_value_label.setText(f'{val} {ch_unit}')
-                elif is_integer_type(constraints.data_type):
-                    self._mw.current_value_label.setText(f'{val:,d} {ch_unit}')
-                elif precision is None:
-                    self._mw.current_value_label.setText(f'{ScaledFloat(val):.5r}{ch_unit}')
-                else:
-                    self._mw.current_value_label.setText(f'{val:,.{precision:d}f} {ch_unit}')
-            except (TypeError, IndexError, KeyError):
+                ch_units = [constraints.channel_units[ch] for ch in disp_chls]
+                precisions = [self._current_value_channel_precision[ch] for ch in disp_chls]
+                display_text = ''
+                for ch, value, ch_unit, precision in zip(disp_chls, vals, ch_units, precisions):
+                    if np.isnan(value):
+                        display_text += f'{ch}: {value} {ch_unit}\n'
+                    elif is_integer_type(constraints.data_type):
+                        display_text += f'{ch}: {value:,d} {ch_unit}\n'
+                    elif precision is None:
+                        display_text += f'{ch}: {ScaledFloat(value):.5r}{ch_unit}\n'
+                    else:
+                        display_text += f'{ch}: {ScaledFloat(value):,.{precision:d}f} {ch_unit}\n'
+                self._mw.current_value_label.setText(display_text.strip())
+            except (TypeError, IndexError, KeyError) as e:
+                print(e)
                 pass
 
     @QtCore.Slot(bool)
@@ -528,16 +608,29 @@ class TimeSeriesGui(GuiBase):
             self._vb.removeItem(average_curve)
         if average_curve in self._mw.trace_plot_widget.items():
             self._mw.trace_plot_widget.removeItem(average_curve)
+        for vb in self._add_vb:
+            if data_curve in vb.addedItems:
+                vb.removeItem(data_curve)
+            if average_curve in vb.addedItems:
+                vb.removeItem(average_curve)
 
     def _toggle_channel_data_plot(self, channel, show_data: bool, show_average: bool):
         self._remove_channel_from_plot(channel)
         if show_data:
             if channel in self._channels_per_axis[0]:
                 self._mw.trace_plot_widget.addItem(self.curves[channel])
-            else:
+            elif channel in self._channels_per_axis[1]:
                 self._vb.addItem(self.curves[channel])
+            else:
+                for ch_per_axis, vb in zip(self._channels_per_axis[2:], self._add_vb):
+                    if channel in ch_per_axis:
+                        vb.addItem(self.curves[channel])
         if show_average:
             if channel in self._channels_per_axis[0]:
                 self._mw.trace_plot_widget.addItem(self.averaged_curves[channel])
-            else:
+            elif channel in self._channels_per_axis[1]:
                 self._vb.addItem(self.averaged_curves[channel])
+            else:
+                for ch_per_axis, vb in zip(self._channels_per_axis[2:], self._add_vb):
+                    if channel in ch_per_axis:
+                        vb.addItem(self.averaged_curves[channel])

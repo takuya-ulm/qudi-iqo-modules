@@ -56,10 +56,12 @@ class ChannelSettingsDialog(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel('Channel Name'), 0, 0)
         layout.addWidget(QtWidgets.QLabel('Is Active?'), 0, 1)
         layout.addWidget(QtWidgets.QLabel('Moving Average?'), 0, 2)
+        layout.addWidget(QtWidgets.QLabel('Link to axis:'), 0, 3)
+        layout.addWidget(QtWidgets.QLabel('Auto?'), 0, 4)
         line = QtWidgets.QFrame()
         line.setFrameShape(QtWidgets.QFrame.HLine)
         line.setFrameShadow(QtWidgets.QFrame.Sunken)
-        layout.addWidget(line, 1, 0, 1, 3)
+        layout.addWidget(line, 1, 0, 1, 5)
 
         self.channel_widgets = dict()
         for row, ch in enumerate(channels, 2):
@@ -67,18 +69,29 @@ class ChannelSettingsDialog(QtWidgets.QDialog):
             label.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
             checkbox_1 = QtWidgets.QCheckBox()
             checkbox_2 = QtWidgets.QCheckBox()
+            checkbox_3 = QtWidgets.QCheckBox()
             checkbox_1.stateChanged.connect(checkbox_2.setEnabled)
+            combobox = QtWidgets.QComboBox()
+            combobox.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+            combobox.setMinimumContentsLength(3)
+            combobox.setMaxVisibleItems(10)
+            for n in range(1, len(channels) + 1):
+                combobox.addItem(f'y-axis {n}')
             layout.addWidget(label, row, 0)
             layout.addWidget(checkbox_1, row, 1)
             layout.addWidget(checkbox_2, row, 2)
-            self.channel_widgets[ch] = (checkbox_1, checkbox_2)
+            layout.addWidget(combobox, row, 3)
+            layout.addWidget(checkbox_3, row, 4)
+            checkbox_3.toggled[bool].connect(combobox.setDisabled)
+            self.channel_widgets[ch] = (checkbox_1, checkbox_2, combobox, checkbox_3)
         layout.setRowStretch(len(self.channel_widgets) + 2, 1)
 
-    def get_channel_states(self) -> Dict[str, Tuple[bool, bool]]:
-        return {ch: (w[0].isChecked(), w[0].isChecked() and w[1].isChecked()) for ch, w in
+    def get_channel_states(self) -> Dict[str, Tuple[bool, bool, Union[str, None]]]:
+        return {ch: (w[0].isChecked(), w[0].isChecked() and w[1].isChecked(),
+                     None if w[3].isChecked() else w[2].currentText()) for ch, w in
                 self.channel_widgets.items()}
 
-    def set_channel_states(self, channel_states: Mapping[str, Tuple[bool, bool]]) -> None:
+    def set_channel_states(self, channel_states: Mapping[str, Tuple[bool, bool, Union[str, None]]]) -> None:
         for ch, state in channel_states.items():
             try:
                 widgets = self.channel_widgets[ch]
@@ -87,6 +100,12 @@ class ChannelSettingsDialog(QtWidgets.QDialog):
             else:
                 widgets[0].setChecked(state[0])
                 widgets[1].setChecked(state[0] and state[1])
+                if state[2] is None:
+                    widgets[3].setChecked(True)
+                else:
+                    widgets[3].setChecked(False)
+                    index = widgets[2].findText(state[2])
+                    widgets[2].setCurrentIndex(index)
 
 
 class TraceViewDialog(QtWidgets.QDialog):
@@ -123,12 +142,10 @@ class TraceViewDialog(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel('Digits'), 1, 3)
         layout.addWidget(QtWidgets.QLabel('Auto?'), 1, 4)
         layout.addWidget(QtWidgets.QLabel('Show Label?'), 0, 5, 2, 1)
-        layout.addWidget(QtWidgets.QLabel('Link to axis:'), 0, 6, 2, 1)
-        layout.addWidget(QtWidgets.QLabel('Auto?'),0,7, 2, 1)
         line = QtWidgets.QFrame()
         line.setFrameShape(QtWidgets.QFrame.HLine)
         line.setFrameShadow(QtWidgets.QFrame.Sunken)
-        layout.addWidget(line, 2, 0, 1, 8)
+        layout.addWidget(line, 2, 0, 1, 6)
 
         self.channel_widgets = dict()
         for row, ch in enumerate(channels, 3):
@@ -138,16 +155,9 @@ class TraceViewDialog(QtWidgets.QDialog):
             checkbox_2 = QtWidgets.QCheckBox()
             checkbox_3 = QtWidgets.QCheckBox()
             checkbox_4 = QtWidgets.QCheckBox()
-            checkbox_5 = QtWidgets.QCheckBox()
             spinbox_1 = QtWidgets.QSpinBox()
             spinbox_1.setRange(0, 15)
             spinbox_1.setValue(5)
-            combobox = QtWidgets.QComboBox()
-            combobox.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
-            combobox.setMinimumContentsLength(8)
-            combobox.setMaxVisibleItems(10)
-            for n in range(1, len(channels)+1):
-                combobox.addItem(f'y-axis {n}')
             layout.addWidget(label, row, 0)
             layout.addWidget(checkbox_1, row, 1)
             layout.addWidget(checkbox_2, row, 2)
@@ -155,12 +165,8 @@ class TraceViewDialog(QtWidgets.QDialog):
             layout.addWidget(checkbox_3, row, 4)
             checkbox_3.toggled[bool].connect(spinbox_1.setDisabled)
             layout.addWidget(checkbox_4, row, 5)
-            layout.addWidget(combobox, row, 6)
-            layout.addWidget(checkbox_5, row, 7)
-            checkbox_5.toggled[bool].connect(combobox.setDisabled)
 
-            self.channel_widgets[ch] = (checkbox_1, checkbox_2, spinbox_1, checkbox_3, checkbox_4, combobox,
-                                        checkbox_5)
+            self.channel_widgets[ch] = (checkbox_1, checkbox_2, spinbox_1, checkbox_3, checkbox_4)
         layout.setRowStretch(len(self.channel_widgets) + 3, 1)
         layout.setColumnStretch(5, 1)
 
@@ -172,20 +178,17 @@ class TraceViewDialog(QtWidgets.QDialog):
             self.scroll_area.verticalScrollBar().sizeHint().width()
         )
 
-    def get_channel_states(self) -> Dict[str, Tuple[bool, bool, Union[int, None], bool, Union[str, None]]]:
+    def get_channel_states(self) -> Dict[str, Tuple[bool, bool, Union[int, None], bool]]:
         return {
-            ch: (w[0].isChecked(), w[1].isChecked(), None if w[3].isChecked() else w[2].value(), w[4].isChecked(),
-                 None if w[6].isChecked() else w[5].currentText()) for ch, w in self.channel_widgets.items()
+            ch: (w[0].isChecked(), w[1].isChecked(), None if w[3].isChecked() else w[2].value(), w[4].isChecked()) for ch, w in self.channel_widgets.items()
         }
 
     def set_channel_states(self,
-                           channel_states: Mapping[str, Tuple[bool, bool, Union[int, None], bool, Union[str, None]]]
+                           channel_states: Mapping[str, Tuple[bool, bool, Union[int, None], bool]]
                            ) -> None:
-        # print(channel_states.items())
         for ch, state in channel_states.items():
             try:
                 widgets = self.channel_widgets[ch]
-                # print(widgets)
             except KeyError:
                 pass
             else:
@@ -197,9 +200,3 @@ class TraceViewDialog(QtWidgets.QDialog):
                     widgets[3].setChecked(False)
                     widgets[2].setValue(state[2])
                 widgets[4].setChecked(state[3])
-                if state[4] is None:
-                    widgets[6].setChecked(True)
-                else:
-                    widgets[6].setChecked(False)
-                    index = widgets[5].findText(state[4])
-                    widgets[5].setCurrentIndex(index)
